@@ -1,0 +1,5 @@
+{
+  "name": "hermes-lectern",
+  "tab": {"hidden": true},
+  "api": "plugin_api.py"
+}
