@@ -4,7 +4,7 @@
 
 Read and edit an Obsidian vault inside Hermes Desktop, next to your conversation with Hermes.
 
-Hermes Lectern adds a Lectern page to Desktop. It opens to a dashboard of recent notes, the notes Hermes has changed, and your tasks from task notes or checkboxes. Notes open in a reader with properties, contents and backlinks, and you can edit and save them in place. It is built to sit in half of the Desktop window while you talk to Hermes in the other half.
+Hermes Lectern adds a Lectern page to Desktop. It opens to a dashboard of recent notes, the notes Hermes has changed, and the tasks that are overdue, due soon or in progress, read from task notes or checkboxes. Notes open in a reader with properties, contents and backlinks, and you can edit and save them in place. It is built to sit in half of the Desktop window while you talk to Hermes in the other half.
 
 ![Dashboard with the Hermes tab open: needs you, due and the notes Hermes changed](screenshots/dashboard-changed-by-hermes.png)
 
@@ -41,7 +41,7 @@ Open Settings with the gear icon at the top of the Lectern page.
 | Setting | What it does | Default |
 | --- | --- | --- |
 | Vault folder | The vault to read and edit | none |
-| Task notes tag | Notes with this tag are tasks, one note per task. Their `status`, `due` and `projects` fields are read. To use a folder instead, set `tasks.notes.folder` in `config.json` | `tasknote` |
+| Task notes tag | Notes with this tag are tasks, one note per task. Their `status`, `due` and `projects` fields are read. To also treat every note in a vault folder as a task, set `tasks.notes.folder` in `config.json` (a folder path inside the vault, e.g. `Tasks`) | `tasknote` |
 | Read checkbox tasks | Reads `- [ ]` lines in every note. `[/]` counts as in progress, and done or cancelled items are skipped. At most 5,000 are kept | on |
 | Attention field | A frontmatter field that marks a task note as needing you. A task appears under Needs you when this field is true and its status is `waiting` or `blocked` | off |
 | Attention tag | A tag such as `#needs-me` that marks an open checkbox task as needing you | off |

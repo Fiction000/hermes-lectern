@@ -5,14 +5,14 @@ sha: <TO_PIN_AFTER_PUSH>
 version: "0.5.0"
 description: >-
   A desk you share with Hermes, inside Hermes Desktop: one dashboard of what Hermes just changed
-  with write_file and patch, recent notes and your open tasks, plus a reader and
+  with write_file and patch, recent notes and your tasks that are overdue, due within 7 days or in progress, plus a reader and
   editor for an Obsidian vault. Open notes reload when Hermes edits them, and saves are
   conflict-safe: if Hermes or another app changes the note you are editing, your draft is
   kept and you can keep it, load the disk version or compare the two side by side. Editing
   is raw Markdown (no visual editor, graph or tabs). Tasks come from task notes
   (TaskNotes style, by tag or folder) and from checkbox tasks (Obsidian Tasks 📅 dates,
-  Dataview [due:: ] fields): overdue, due within 7 days, in progress and, once you set an
-  attention field or tag, the ones that need you. English and Japanese UI. All file access goes
+  Dataview [due:: ] fields). Once you set an attention field or tag, the ones that
+  need you are listed too. English and Japanese UI. All file access goes
   through the plugin's own dashboard backend: no agent tools or hooks, no shell commands, no network
   calls beyond Hermes' own API. Tested on macOS; Linux is untested and Windows is not supported.
   Disclosure — reads the Markdown files of the vault folder you choose, plus image files

@@ -1,6 +1,6 @@
 # Add hermes-lectern to the plugin catalog
 
-**Hermes Lectern** is a Hermes Desktop plugin: a desk you share with Hermes. It reads and edits an Obsidian vault next to the conversation, and shows what Hermes just changed and your open tasks, including the ones that need you.
+**Hermes Lectern** is a Hermes Desktop plugin: a desk you share with Hermes. It reads and edits an Obsidian vault next to the conversation, and shows what Hermes just changed and the tasks that are overdue, due soon or in progress.
 
 - Repo: https://github.com/Fiction000/hermes-lectern (maintainer: Fiction000, the repository owner)
 - Pinned at `<SHA>`, version 0.5.0, MIT licence, `requires_hermes: ">=0.21.5"` (also in `plugin.yaml`)
@@ -41,7 +41,7 @@ The screenshots use a made-up vault and were rendered from `desktop/plugin.js` o
 
 | | Hermes Lectern | Vault View | obsidian-memory |
 | --- | --- | --- | --- |
-| Focus | Shared desk: needs-you dashboard, notes Hermes changed | Full vault workspace | Vault browser and graph |
+| Focus | Shared desk: tasks and notes Hermes changed | Full vault workspace | Vault browser and graph |
 | Editing | Raw Markdown | Visual and Markdown, tabs | Raw Markdown |
 | Graph | No | Yes | Yes |
 | Edit while Hermes writes | Draft kept, compare view, stale saves refused | Draft kept on conflict | Saves overwrite without a revision check (at `1123998`) |
@@ -57,5 +57,5 @@ Run on the pinned tree, macOS:
 - `node --test tests/`: 26 pass
 - `uv run --python 3.14 --with pytest --with fastapi --with httpx pytest -q`: 82 passed
 - `hermes plugins validate <copy-of-repo>`: exit 0
-- Used daily in Hermes Desktop on macOS. The image embeds (0.4.0) and task sources (0.5.0) were checked on the test page and against a real vault through the backend.
+- Used daily in Hermes Desktop on macOS, but not yet with the image embeds (0.4.0) or task sources (0.5.0). Both were checked against a real vault through the backend; the image embeds were also checked on the test page.
 - Not tested: Linux.
