@@ -11,7 +11,8 @@ from test_paths_frontmatter import core
 def test_optional_dashboard_config_and_backward_compatibility(vault):
     config_path = core.config_path()
     config_path.write_text(json.dumps({"root": str(vault), "exclude": ["Attachments"]}))
-    assert core.load_config() == {"root": str(vault), "exclude": ["Attachments"], "attention_field": None, "inbox_folder": None, "locale": "auto"}
+    assert core.load_config() == {"root": str(vault), "exclude": ["Attachments"], "attention_field": None, "inbox_folder": None, "locale": "auto",
+                                  "tasks": {"notes": {"enabled": True, "tag": "tasknote", "folder": None}, "checkboxes": {"enabled": True}}, "attention_tag": None}
     configured = core.configure(str(vault), attention_field="review_for", inbox_folder="Dropzone", locale="ja")
     assert configured["attention_field"] == "review_for"
     assert core.load_config() == configured

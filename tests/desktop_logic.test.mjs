@@ -243,3 +243,35 @@ test('image UI strings exist in both languages', () => {
   assert.equal(plugin.t('imageLoading', {}, 'ja'), '画像を読み込み中…');
   assert.equal(plugin.t('imageMissing', { name: 'a.png' }, 'ja'), '画像が見つかりません: a.png');
 });
+
+test('checkboxDisplayText strips due markers but keeps the words and tags', () => {
+  const { checkboxDisplayText } = plugin;
+  assert.equal(checkboxDisplayText('Ship it 📅 2026-11-20'), 'Ship it');
+  assert.equal(checkboxDisplayText('Ship it [due:: 2026-11-20] #work'), 'Ship it #work');
+  assert.equal(checkboxDisplayText('Ship it (due:: 2026-11-20)'), 'Ship it');
+  assert.equal(checkboxDisplayText('Ship it due:: 2026-11-20 today'), 'Ship it today');
+  assert.equal(checkboxDisplayText('📅 2026-11-20 first'), 'first');
+  assert.equal(checkboxDisplayText('no markers #needs-me'), 'no markers #needs-me');
+  assert.equal(checkboxDisplayText('📅 2026-11-20'), '📅 2026-11-20');  // never show an empty row
+});
+
+test('hasTasks falls back to counts.tasknotes for older backends', () => {
+  const { hasTasksIn } = plugin;
+  assert.equal(hasTasksIn({ tasks: 2, tasknotes: 0 }), true);
+  assert.equal(hasTasksIn({ tasks: 0, tasknotes: 5 }), false);
+  assert.equal(hasTasksIn({ tasknotes: 5 }), true);
+  assert.equal(hasTasksIn({}), false);
+  assert.equal(hasTasksIn(undefined), false);
+});
+
+test('task source settings strings exist in both languages', () => {
+  const { STRINGS } = plugin;
+  for (const key of ['taskTagLabel', 'checkboxesLabel', 'attentionTagLabel', 'inNote']) {
+    assert.ok(STRINGS.en[key], `en.${key}`);
+    assert.ok(STRINGS.ja[key], `ja.${key}`);
+  }
+  assert.equal(plugin.t('taskTagLabel'), 'Task notes tag');
+  assert.equal(plugin.t('inNote', { note: 'Plan' }), 'in Plan');
+  assert.match(plugin.t('checkboxesLabel', {}, 'ja'), /チェックボックス/);
+  assert.match(plugin.t('inNote', { note: 'Plan' }, 'ja'), /Plan/);
+});

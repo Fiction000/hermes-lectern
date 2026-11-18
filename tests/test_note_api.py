@@ -57,7 +57,6 @@ def test_symlink_escape_rejected_for_all_mutating_and_read_routes(setup_vault,tm
         assert client.get("/api/plugins/hermes-lectern/note",params={"path":path}).status_code == 400,path
         assert client.put("/api/plugins/hermes-lectern/note",json={"path":path,"content":"x","base_sha256":"x"}).status_code == 400,path
         assert client.post("/api/plugins/hermes-lectern/note",json={"path":path,"content":"x"}).status_code == 400,path
-        assert client.post("/api/plugins/hermes-lectern/note/trash",json={"path":path}).status_code == 400,path
     assert (outside/"secret.md").read_text() == "outside"
 
 
@@ -67,26 +66,6 @@ def test_rejections_and_nested_create(setup_vault):
         assert client.get("/api/plugins/hermes-lectern/note",params={"path":path}).status_code == 400
         assert client.post("/api/plugins/hermes-lectern/note",json={"path":path,"content":"x"}).status_code == 400
     assert client.post("/api/plugins/hermes-lectern/note",json={"path":"safe/nested/ok.md","content":"# ok"}).status_code == 200
-
-
-def test_trash_unique_and_recoverable(setup_vault):
-    _,root=setup_vault; trash=root/".trash"; trash.mkdir()
-    prior=trash/"item.md"; prior.write_text("do not overwrite")
-    note=root/"item.md"; note.write_text("# recover me")
-    response=client.post("/api/plugins/hermes-lectern/note/trash",json={"path":"item.md"})
-    assert response.status_code == 200
-    moved=root/response.json()["trashed"]
-    assert moved.read_text() == "# recover me" and prior.read_text() == "do not overwrite" and not note.exists()
-
-
-def test_trash_rejects_unsafe_trash_directory(setup_vault,tmp_path):
-    _,root=setup_vault
-    outside=tmp_path/"outside"; outside.mkdir()
-    (root/".trash").symlink_to(outside,target_is_directory=True)
-    note=root/"keep.md"; note.write_text("# safe")
-    response=client.post("/api/plugins/hermes-lectern/note/trash",json={"path":"keep.md"})
-    assert response.status_code == 409 and response.json()["error"] == "trash_unavailable"
-    assert note.read_text() == "# safe" and list(outside.iterdir()) == []
 
 
 def test_get_routes_on_fresh_home_do_not_write(tmp_path,monkeypatch):

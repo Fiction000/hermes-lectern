@@ -156,6 +156,10 @@ export const STRINGS = {
     noHeadings: "No headings",
     edit: "Edit",
     attentionLabel: "Frontmatter field that marks a task as needing you (optional)",
+    attentionTagLabel: "Tag that marks a checkbox task as needing you (optional)",
+    taskTagLabel: "Task notes tag",
+    checkboxesLabel: "Read checkbox tasks",
+    inNote: "in {note}",
     inboxLabel: "Inbox folder for new notes (optional)",
     language: "Language",
     settings: "Settings",
@@ -253,6 +257,10 @@ export const STRINGS = {
     noHeadings: "見出しはありません",
     edit: "編集",
     attentionLabel: "「判断待ち」を示すフロントマターの項目（任意）",
+    attentionTagLabel: "判断待ちを示すタグ（任意）",
+    taskTagLabel: "タスクノートのタグ",
+    checkboxesLabel: "チェックボックスのタスクも読む",
+    inNote: "{note} 内",
     inboxLabel: "新しいノートの保存先フォルダ（任意）",
     language: "表示言語",
     settings: "設定",
@@ -338,6 +346,15 @@ const CSS = `
 @container hv (max-width:560px){.hv-stats{gap:7px}.hv-stat{padding:8px;min-height:68px}.hv-stat-number{font-size:34px}.hv-compact{grid-template-columns:1fr;gap:16px}.hv-top{flex-wrap:wrap}.hv-top .grow{order:2;flex-basis:100%}.hv-read-doc{padding:18px 18px 60px}}
 `;
 
+const DUE_MARKERS = [/\s*📅\s*\d{4}-\d{2}-\d{2}/g, /\s*[[(]\s*due::\s*\d{4}-\d{2}-\d{2}\s*[\])]/g, /\s*\bdue::\s*\d{4}-\d{2}-\d{2}/g];
+// A checkbox task's text without its due markers (the due label shows the date); hashtags stay.
+export function checkboxDisplayText(text) {
+  const original = String(text ?? '');
+  const shown = DUE_MARKERS.reduce((s, re) => s.replace(re, ''), original).replace(/\s{2,}/g, ' ').trim();
+  return shown || original;
+}
+// counts.tasks is the current total; older backends only sent counts.tasknotes.
+export function hasTasksIn(counts) { return Number(counts?.tasks ?? counts?.tasknotes ?? 0) > 0; }
 const day = ns => new Date(Number(ns) / 1e6);
 const sameDay = (a, b) => a.toDateString() === b.toDateString();
 function dayLabel(ns, locale = LOCALE) {
@@ -541,7 +558,7 @@ function Home({ api, onOpen, touchedStore }) {
   useEffect(() => { api.storage?.set('desk-tab', tab); setMore(false); }, [tab]);
   if (q.isPending) return jsx('div', { className: 'hv-home', role: 'status', children: jsx(Skeleton, { className: 'h-40 w-full' }) });
   if (q.isError) return jsx('div', { className: 'hv-home', children: jsx(ErrorState, { title: L('loadVaultFail'), description: String(q.error?.message || ''), children: btn(L('retry'), () => q.refetch()) }) });
-  const d = q.data, now = new Date(), locale = pickLocale(d.locale || api.locale, navigator.language), needs = d.attention || [], due = d.due || [], hasTasks = Number(d.counts?.tasknotes ?? 0) > 0, sections = d.sections || {};
+  const d = q.data, now = new Date(), locale = pickLocale(d.locale || api.locale, navigator.language), needs = d.attention || [], due = d.due || [], hasTasks = hasTasksIn(d.counts), sections = d.sections || {};
   const overdue = due.filter(n => n.overdue), soon = due.filter(n => !n.overdue && dueLabel(n.props?.due, now).tone === 'orange');
   const groups = Object.entries(d.in_progress || {}).sort((x, y) => y[1].length - x[1].length || projectName(x[0]).localeCompare(projectName(y[0]), 'en'));
   const visibleTabs = DESK_TABS.filter(([id]) => id !== 'projects' || groups.length > 0);
@@ -549,6 +566,16 @@ function Home({ api, onOpen, touchedStore }) {
   const recent = d.recent || [];
   const projectMark = label => label && jsxs('span', { className: 'hv-project', title: projectName(label), children: [jsx('i', { className: 'hv-project-dot', style: { '--project-color': projectColor(label) } }), jsx('span', { className: 'hv-project-name', children: projectName(label) })] });
   const meta = (label, tail, tone = '') => jsxs('span', { className: 'hv-d-meta', children: [projectMark(label), tail && jsx('span', { className: `hv-meta ${tone}`, children: tail })] });
+  // Task rows: note tasks show the note, checkbox tasks show their text and which note they live in.
+  const taskKey = n => `${n.path}:${n.line ?? ''}`;
+  const taskRow = (n, tail, tone, extra = {}) => {
+    const first = (n.props?.projects || [])[0];
+    if (n.kind !== 'checkbox') return jsx(NoteRow, { note: n, onOpen, sub: meta(first, tail, tone), ...extra }, taskKey(n));
+    const sameAsNote = projectName(first) === projectName(n.note_title);
+    return jsx(NoteRow, { note: { ...n, title: checkboxDisplayText(n.title) }, onOpen, ...extra, sub: jsxs('span', { children: [
+      meta(sameAsNote ? '' : first, tail, tone), jsx('span', { className: 'hv-sub hv-task-note', style: { display: 'block' }, children: L('inNote', { note: n.note_title || n.path }) }),
+    ] }) }, taskKey(n));
+  };
   const figure = (count, label, tone, onClick) => jsxs('button', { type: 'button', className: `hv-d-fig ${count ? tone : 'zero'}`, onClick, children: [
     jsx('span', { className: 'hv-d-num', children: count }), jsx('span', { className: 'hv-d-label', children: label }),
   ] });
@@ -582,11 +609,11 @@ function Home({ api, onOpen, touchedStore }) {
       hasTasks && jsxs('div', { className: 'hv-d-col', children: [
         hasTasks && sections.attention && jsx('div', { id: 'hv-d-needs', children: section(L('needs'), needs.map(n => {
           const blocked = n.props?.status === 'blocked', label = dueLabel(n.props?.due, now);
-          return jsx(NoteRow, { note: n, onOpen, sub: meta((n.props?.projects || [])[0], blocked ? L('stalled') : label.text, blocked ? 'red' : label.tone) }, n.path);
+          return taskRow(n, blocked ? L('stalled') : label.text, blocked ? 'red' : label.tone);
         }), L('noNeeds')) }),
         hasTasks && jsx('div', { id: 'hv-d-due', children: section(L('due'), due.map(n => {
           const label = dueLabel(n.props?.due, now);
-          return jsx(NoteRow, { note: n, onOpen, className: n.overdue ? 'hv-overdue' : '', sub: meta((n.props?.projects || [])[0], label.text, label.tone) }, n.path);
+          return taskRow(n, label.text, label.tone, { className: n.overdue ? 'hv-overdue' : '' });
         }), L('noDue')) }),
       ] }),
       jsxs('section', { className: 'hv-d-section hv-d-desk', ref: deskRef, children: [
@@ -828,10 +855,14 @@ function Setup({ api, initial, onDone }) {
   const [busy, setBusy] = useState(false);
   const [attentionField, setAttentionField] = useState(initial?.attention_field || '');
   const [inboxFolder, setInboxFolder] = useState(initial?.inbox_folder || '');
+  const [taskTag, setTaskTag] = useState(initial?.tasks?.notes?.tag || 'tasknote');
+  const [readBoxes, setReadBoxes] = useState(initial?.tasks?.checkboxes?.enabled !== false);
+  const [attentionTag, setAttentionTag] = useState(initial?.attention_tag || '');
   const [locale, setLocale] = useState(initial?.locale || 'auto');
   async function apply() {
     setBusy(true);
-    try { await api.rest('/config', { method: 'PUT', body: { root: root.trim(), ...(initial?.exclude ? { exclude: initial.exclude } : {}), attention_field: attentionField.trim() || null, inbox_folder: inboxFolder.trim() || null, locale } }); await api.rest('/refresh', { method: 'POST' }); queryClient.invalidateQueries({ queryKey: api.cache }); onDone?.(); }
+    const tasks = { notes: { enabled: initial?.tasks?.notes?.enabled ?? true, tag: taskTag.trim().replace(/^#/, '') || 'tasknote', folder: initial?.tasks?.notes?.folder ?? null }, checkboxes: { enabled: readBoxes } };
+    try { await api.rest('/config', { method: 'PUT', body: { root: root.trim(), ...(initial?.exclude ? { exclude: initial.exclude } : {}), attention_field: attentionField.trim() || null, inbox_folder: inboxFolder.trim() || null, locale, tasks, attention_tag: attentionTag.trim() || null } }); await api.rest('/refresh', { method: 'POST' }); queryClient.invalidateQueries({ queryKey: api.cache }); onDone?.(); }
     catch (error) { host.notify({ kind: 'error', message: L('rootFail', { err: error?.message || '' }) }); }
     finally { setBusy(false); }
   }
@@ -839,7 +870,10 @@ function Setup({ api, initial, onDone }) {
     jsx('h2', { className: 'hv-h1', children: initial ? L('setupEditTitle') : L('setupTitle') }),
     jsx('p', { className: 'hv-sub', children: L('setupHint') }),
     jsx(Input, { value: root, placeholder: '/path/to/your/vault', onChange: e => setRoot(e.target.value) }),
+    jsxs('label', { className: 'hv-field', children: [L('taskTagLabel'), jsx(Input, { value: taskTag, placeholder: 'tasknote', onChange: e => setTaskTag(e.target.value) })] }),
+    jsxs('label', { className: 'hv-field', children: [jsx('input', { type: 'checkbox', checked: readBoxes, onChange: e => setReadBoxes(e.target.checked), style: { marginRight: 8 } }), L('checkboxesLabel')] }),
     jsxs('label', { className: 'hv-field', children: [L('attentionLabel'), jsx(Input, { value: attentionField, placeholder: 'needs_review', onChange: e => setAttentionField(e.target.value) })] }),
+    jsxs('label', { className: 'hv-field', children: [L('attentionTagLabel'), jsx(Input, { value: attentionTag, placeholder: '#needs-me', onChange: e => setAttentionTag(e.target.value) })] }),
     jsxs('label', { className: 'hv-field', children: [L('inboxLabel'), jsx(Input, { value: inboxFolder, placeholder: 'Inbox', onChange: e => setInboxFolder(e.target.value) })] }),
     jsxs('label', { className: 'hv-field', children: [L('language'), jsx('select', { className: 'hv-select', value: locale, onChange: e => setLocale(e.target.value), children: [jsx('option', { value: 'auto', children: 'Auto' }), jsx('option', { value: 'en', children: 'English' }), jsx('option', { value: 'ja', children: '\u65e5\u672c\u8a9e' })] })] }),
     jsx('div', { style: { display: 'flex', gap: 8 }, children: [onDone && btn(L('cancel'), onDone, { key: 'c', variant: 'ghost' }), btn(busy ? L('indexing') : initial ? L('save') : L('useFolder'), apply, { variant: 'default', key: 'a', disabled: busy || !root.trim().startsWith('/') })] }),

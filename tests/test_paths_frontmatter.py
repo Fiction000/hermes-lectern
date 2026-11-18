@@ -8,9 +8,9 @@ spec.loader.exec_module(core)
 
 
 def test_frontmatter_block_inline_and_scalars():
-    text = '---\r\ntags:\r\n  - tasknote\r\n  - "domain/test"\r\nprojects: ["[[A]]", "B"]\r\nneeds_me: true\r\ndue: 2026-11-20\r\nowner: \'Tatsu\'\r\n---\r\n# 見出し\r\nbody'
+    text = '---\r\ntags:\r\n  - tasknote\r\n  - "domain/test"\r\nprojects: ["[[A]]", "B"]\r\nneeds_me: true\r\ndue: 2026-11-20\r\nowner: \'Alex\'\r\n---\r\n# 見出し\r\nbody'
     props, body = core.parse_frontmatter(text)
-    assert props == {"tags": ["tasknote", "domain/test"], "projects": ["[[A]]", "B"], "needs_me": True, "due": "2026-11-20", "owner": "Tatsu"}
+    assert props == {"tags": ["tasknote", "domain/test"], "projects": ["[[A]]", "B"], "needs_me": True, "due": "2026-11-20", "owner": "Alex"}
     assert body == "# 見出し\nbody"
 
 

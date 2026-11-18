@@ -41,4 +41,4 @@ def test_dashboard_rules_and_overdue(vault):
     assert {n["path"] for n in data["in_progress"]["Projects/Reader"]} == {"open.md","later.md"}
     assert {n["path"] for n in data["recent"]} == {"ordinary.md","Inbox/inbox.md"}
     assert data["inbox"][0]["path"] == "Inbox/inbox.md"
-    assert data["counts"] == {"notes":7,"tasknotes":5}
+    assert data["counts"] == {"notes":7,"tasks":4,"tasknotes":4,"truncated":False}  # open tasks only; done.md no longer counts

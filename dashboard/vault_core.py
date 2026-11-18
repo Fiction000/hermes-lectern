@@ -10,7 +10,6 @@ import sqlite3
 import tempfile
 import threading
 import time
-import uuid
 from urllib.parse import unquote
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -22,7 +21,13 @@ MAX_ASSET_BYTES = 15 * 1024 * 1024
 IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
               "avif": "image/avif", "bmp": "image/bmp", "svg": "image/svg+xml"}
 _ASSET_MAPS: dict[str, dict[str, list[str]]] = {}
-SCHEMA_VERSION = "3"  # 3: re-read titles after the quoted-# frontmatter fix
+SCHEMA_VERSION = "4"  # 4: tasks table (note tasks and checkbox tasks); 3: re-read titles after the quoted-# frontmatter fix
+MAX_CHECKBOX_TASKS = 5000
+TASK_TEXT_LIMIT = 200
+DEFAULT_TASKS = {"notes": {"enabled": True, "tag": "tasknote", "folder": None}, "checkboxes": {"enabled": True}}
+IN_PROGRESS_STATUSES = {"in-progress", "in progress", "doing", "active", "open"}
+WAITING_STATUSES = {"waiting", "blocked"}
+DONE_STATUSES = {"done", "completed", "complete", "canceled", "cancelled"}
 
 
 class VaultError(Exception):
@@ -62,9 +67,15 @@ def load_config() -> dict | None:
         root = Path(data["root"])
         if not root.is_absolute() or not root.is_dir():
             return None
+        try:
+            tasks = _normalize_tasks(data.get("tasks"))
+        except VaultError:
+            tasks = _normalize_tasks(None)
+        attention_tag = data.get("attention_tag")
         return {"root": str(root), "exclude": list(data.get("exclude", ["Attachments"])),
                 "attention_field": data.get("attention_field"), "inbox_folder": data.get("inbox_folder"),
-                "locale": data.get("locale", "auto")}
+                "locale": data.get("locale", "auto"), "tasks": tasks,
+                "attention_tag": attention_tag if isinstance(attention_tag, str) and attention_tag else None}
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
@@ -76,8 +87,45 @@ def require_config() -> tuple[Path, list[str]]:
     return Path(cfg["root"]), cfg["exclude"]
 
 
+def _normalize_tag(tag: str) -> str:
+    return tag.strip().lstrip("#").strip().casefold()
+
+
+def _normalize_tasks(tasks: Any) -> dict:
+    """Task source settings with defaults filled in; raises bad_tasks_config for anything unexpected."""
+    out = {"notes": dict(DEFAULT_TASKS["notes"]), "checkboxes": dict(DEFAULT_TASKS["checkboxes"])}
+    if tasks is None:
+        return out
+    if not isinstance(tasks, dict) or set(tasks) - {"notes", "checkboxes"}:
+        raise VaultError("bad_tasks_config")
+    notes, boxes = tasks.get("notes"), tasks.get("checkboxes")
+    if notes is not None:
+        if not isinstance(notes, dict) or set(notes) - {"enabled", "tag", "folder"}:
+            raise VaultError("bad_tasks_config")
+        if "enabled" in notes:
+            if not isinstance(notes["enabled"], bool):
+                raise VaultError("bad_tasks_config")
+            out["notes"]["enabled"] = notes["enabled"]
+        if "tag" in notes:
+            tag = notes["tag"]
+            if not isinstance(tag, str) or not tag.strip().lstrip("#").strip():
+                raise VaultError("bad_tasks_config")
+            out["notes"]["tag"] = tag.strip().lstrip("#").strip()
+        if notes.get("folder") is not None:
+            folder = notes["folder"]
+            if not isinstance(folder, str) or not folder.strip().strip("/"):
+                raise VaultError("bad_tasks_config")
+            out["notes"]["folder"] = folder.strip().strip("/")
+    if boxes is not None:
+        if not isinstance(boxes, dict) or set(boxes) - {"enabled"} or ("enabled" in boxes and not isinstance(boxes["enabled"], bool)):
+            raise VaultError("bad_tasks_config")
+        out["checkboxes"]["enabled"] = boxes.get("enabled", True)
+    return out
+
+
 def configure(root: str, exclude: list[str] | None = None, attention_field: str | None = None,
-              inbox_folder: str | None = None, locale: str = "auto") -> dict:
+              inbox_folder: str | None = None, locale: str = "auto", tasks: dict | None = None,
+              attention_tag: str | None = None) -> dict:
     p = Path(root)
     if not p.is_absolute() or not p.is_dir() or not (p / ".obsidian").is_dir():
         raise VaultError("bad_root")
@@ -91,13 +139,17 @@ def configure(root: str, exclude: list[str] | None = None, attention_field: str 
     if locale not in {"auto", "en", "ja"}:
         raise VaultError("bad_locale")
     locale = "auto" if locale is None else locale
+    normalized_tasks = _normalize_tasks(tasks)
+    if attention_tag is not None and (not isinstance(attention_tag, str) or not _normalize_tag(attention_tag)):
+        raise VaultError("bad_attention_tag")
     target = config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     config = {"root": str(p), "exclude": excluded, "attention_field": attention_field,
-              "inbox_folder": inbox_folder, "locale": locale}
+              "inbox_folder": inbox_folder, "locale": locale, "tasks": normalized_tasks, "attention_tag": attention_tag}
     temp = target.with_suffix(".tmp")
     temp.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     os.replace(temp, target)
+    _rebuild_note_tasks_if_indexed()
     return config
 
 
@@ -183,6 +235,8 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             continue
         if line.startswith(("  - ", "- ")) and key:
             val = line.split("- ", 1)[1].strip()
+            if not isinstance(fm.get(key, []), list):
+                continue  # a block scalar such as `key: |` followed by dashed lines
             fm.setdefault(key, []).append(parse_scalar(val))
             continue
         m = re.match(r"^([A-Za-z0-9_./-]+):(?:\s*(.*))?$", line)
@@ -232,9 +286,12 @@ def _schema(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("DROP TABLE IF EXISTS notes_fts")
         conn.execute("DROP TABLE IF EXISTS links")
+        conn.execute("DROP TABLE IF EXISTS tasks")
         conn.execute("DROP TABLE IF EXISTS notes")
         conn.execute("CREATE TABLE notes(path TEXT PRIMARY KEY,title TEXT,folder TEXT,mtime_ns INTEGER,size INTEGER,tags TEXT,props TEXT,raw_links TEXT NOT NULL)")
         conn.execute("CREATE TABLE links(src TEXT,raw TEXT,target TEXT)")
+        conn.execute("CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT NOT NULL,line INTEGER,kind TEXT NOT NULL,text TEXT,status TEXT,due TEXT,project TEXT,tags TEXT)")
+        conn.execute("CREATE INDEX tasks_path ON tasks(path)")
         conn.execute("CREATE VIRTUAL TABLE notes_fts USING fts5(path UNINDEXED,title,body,tokenize='trigram')")
         conn.execute("CREATE INDEX links_target ON links(target)")
         conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",(SCHEMA_VERSION,))
@@ -284,8 +341,121 @@ def _rebuild_links(conn: sqlite3.Connection) -> None:
             conn.execute("INSERT INTO links VALUES(?,?,?)", (r["path"], raw, _resolve_link(raw, r["path"], paths, by_base)))
 
 
+def _iso_date(raw: Any) -> str | None:
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return date.fromisoformat(str(raw).strip()[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def _project_labels(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return [re.sub(r"^\[\[|\]\]$", "", str(v)).split("|", 1)[0] for v in values if v is not None and v != ""]
+
+
+def _note_task_row(path: str, title: str, tags: list, props: dict, tasks_cfg: dict) -> tuple | None:
+    """The tasks-table row for a note that is itself a task (tag or folder match), else None."""
+    notes_cfg = tasks_cfg["notes"]
+    if not notes_cfg["enabled"]:
+        return None
+    wanted, folder = _normalize_tag(notes_cfg["tag"]), notes_cfg["folder"]
+    if not (any(isinstance(t, str) and _normalize_tag(t) == wanted for t in tags) or (folder and path.startswith(folder + "/"))):
+        return None
+    raw_status = props.get("status")
+    status = "" if raw_status is None else str(raw_status).strip().lower()
+    labels = _project_labels(props.get("projects")) or _project_labels(props.get("project"))
+    return (path, None, "note", title, status, _iso_date(props.get("due")), json.dumps(labels, ensure_ascii=False), json.dumps([t for t in tags if isinstance(t, str)], ensure_ascii=False))
+
+
+def _rebuild_note_tasks(conn: sqlite3.Connection, tasks_cfg: dict) -> None:
+    """Note tasks depend on settings as well as on the note, so they are re-derived from the notes table every time."""
+    conn.execute("DELETE FROM tasks WHERE kind='note'")
+    rows = []
+    for r in conn.execute("SELECT path,title,tags,props FROM notes"):
+        row = _note_task_row(r["path"], r["title"], json.loads(r["tags"]), json.loads(r["props"]), tasks_cfg)
+        if row:
+            rows.append(row)
+    conn.executemany("INSERT INTO tasks(path,line,kind,text,status,due,project,tags) VALUES(?,?,?,?,?,?,?,?)", rows)
+
+
+def _rebuild_note_tasks_if_indexed() -> None:
+    cfg = load_config()
+    if cfg is None or not db_path().exists():
+        return
+    with _LOCK:
+        conn = _connect(False)
+        if conn is None:
+            return
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if row and row[0] == SCHEMA_VERSION:
+                _rebuild_note_tasks(conn, cfg["tasks"])
+                conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+        finally:
+            conn.close()
+
+
+_CHECKBOX = re.compile(r"^\s*[-*+] \[(.)\] (.*\S.*)$")
+_FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})")
+_DUE = re.compile(r"📅\s*(\d{4}-\d{2}-\d{2})|\bdue::\s*(\d{4}-\d{2}-\d{2})")
+_TAG = re.compile(r"(?:^|\s)#([\w/-]+)")
+_CHECKBOX_STATUS = {" ": "open", "/": "in-progress", "x": "done", "X": "done", "-": "cancelled"}
+
+
+def _checkbox_tasks(path: str, content: str, data: dict) -> list[dict]:
+    """Open and in-progress `- [ ] text` lines outside frontmatter and fenced code, with 1-based line numbers."""
+    lines = [line.rstrip("\r") for line in content.split("\n")]
+    start = 0
+    if lines and lines[0].lstrip("\ufeff") == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() in {"---", "..."}), None)
+        if end is not None:
+            start = end + 1
+    props = data["props"]
+    labels = _project_labels(props.get("projects")) or _project_labels(props.get("project")) or [data["title"]]
+    found: list[dict] = []
+    fence: tuple[str, int] | None = None
+    for index in range(start, len(lines)):
+        line = lines[index]
+        if fence:
+            stripped = line.strip()
+            if stripped and stripped[0] == fence[0] and len(stripped) >= fence[1] and set(stripped) == {fence[0]}:
+                fence = None
+            continue
+        opened = _FENCE_OPEN.match(line)
+        if opened:
+            fence = (opened.group(1)[0], len(opened.group(1)))
+            continue
+        m = _CHECKBOX.match(line)
+        if not m:
+            continue
+        status = _CHECKBOX_STATUS.get(m.group(1), "open")
+        if status in {"done", "cancelled"}:
+            continue
+        text = m.group(2).strip()
+        due = next((_iso_date(g) for d in _DUE.finditer(text) for g in d.groups() if g), None)
+        tags = [t for t in _TAG.findall(text) if not t.isdigit()]
+        found.append({"line": index + 1, "text": text[:TASK_TEXT_LIMIT], "status": status, "due": due, "tags": tags, "project": labels})
+    return found
+
+
+def _store_checkboxes(conn: sqlite3.Connection, path: str, content: str, data: dict) -> None:
+    """Replace one note's checkbox rows, honouring the per-vault cap."""
+    conn.execute("DELETE FROM tasks WHERE path=? AND kind='checkbox'", (path,))
+    room = MAX_CHECKBOX_TASKS - conn.execute("SELECT count(*) FROM tasks WHERE kind='checkbox'").fetchone()[0]
+    if room <= 0:
+        return
+    rows = [(path, t["line"], "checkbox", t["text"], t["status"], t["due"], json.dumps(t["project"], ensure_ascii=False), json.dumps(t["tags"], ensure_ascii=False))
+            for t in _checkbox_tasks(path, content, data)[:room]]
+    conn.executemany("INSERT INTO tasks(path,line,kind,text,status,due,project,tags) VALUES(?,?,?,?,?,?,?,?)", rows)
+
+
 def refresh() -> dict:
     root, excluded = require_config()
+    tasks_cfg = (load_config() or {}).get("tasks") or _normalize_tasks(None)
     with _LOCK:
         _ASSET_MAPS.clear()
     started = time.monotonic()
@@ -294,13 +464,19 @@ def refresh() -> dict:
         assert conn
         _schema(conn)
         old = {r["path"]: (r["mtime_ns"], r["size"]) for r in conn.execute("SELECT path,mtime_ns,size FROM notes")}
-        seen: set[str] = set()
         added = updated = unchanged = 0
         changed: list[str] = []
         try:
-            for p, rel in _walk(root, excluded):
+            files = list(_walk(root, excluded))
+            seen = {rel for _, rel in files}
+            removed_paths = set(old) - seen
+            for rel in removed_paths:
+                conn.execute("DELETE FROM notes WHERE path=?", (rel,))
+                conn.execute("DELETE FROM notes_fts WHERE path=?", (rel,))
+                conn.execute("DELETE FROM tasks WHERE path=?", (rel,))
+                changed.append(rel)
+            for p, rel in files:
                 st = p.stat()
-                seen.add(rel)
                 prev = old.get(rel)
                 if prev == (st.st_mtime_ns, st.st_size):
                     unchanged += 1
@@ -310,15 +486,12 @@ def refresh() -> dict:
                 conn.execute("INSERT OR REPLACE INTO notes(path,title,folder,mtime_ns,size,tags,props,raw_links) VALUES(?,?,?,?,?,?,?,?)", (rel, data["title"], str(Path(rel).parent) if "/" in rel else "", st.st_mtime_ns, st.st_size, json.dumps(data["tags"], ensure_ascii=False), json.dumps(data["props"], ensure_ascii=False), json.dumps(data["links"],ensure_ascii=False)))
                 conn.execute("DELETE FROM notes_fts WHERE path=?", (rel,))
                 conn.execute("INSERT INTO notes_fts(path,title,body) VALUES(?,?,?)", (rel, data["title"], data["body"]))
+                _store_checkboxes(conn, rel, content, data)
                 changed.append(rel)
                 if prev is None: added += 1
                 else: updated += 1
-            removed_paths = set(old) - seen
-            for rel in removed_paths:
-                conn.execute("DELETE FROM notes WHERE path=?", (rel,))
-                conn.execute("DELETE FROM notes_fts WHERE path=?", (rel,))
-                changed.append(rel)
             _rebuild_links(conn)
+            _rebuild_note_tasks(conn, tasks_cfg)
             stamp = datetime.now().astimezone().isoformat()
             conn.execute("INSERT OR REPLACE INTO meta VALUES('indexed_at',?)", (stamp,))
             conn.commit()
@@ -427,7 +600,9 @@ def status() -> dict:
             "exclude": cfg["exclude"] if cfg else [],
             "attention_field": cfg["attention_field"] if cfg else None,
             "inbox_folder": cfg["inbox_folder"] if cfg else None,
-            "locale": cfg["locale"] if cfg else "auto"}
+            "locale": cfg["locale"] if cfg else "auto",
+            "tasks": cfg["tasks"] if cfg else _normalize_tasks(None),
+            "attention_tag": cfg["attention_tag"] if cfg else None}
 
 
 def _row_note(row: sqlite3.Row) -> dict:
@@ -546,7 +721,8 @@ def _update_one(path: str, p: Path, content: str) -> None:
             st=p.stat(); data=_note_data(path,content)
             conn.execute("INSERT OR REPLACE INTO notes(path,title,folder,mtime_ns,size,tags,props,raw_links) VALUES(?,?,?,?,?,?,?,?)",(path,data["title"],str(Path(path).parent) if "/" in path else "",st.st_mtime_ns,st.st_size,json.dumps(data["tags"],ensure_ascii=False),json.dumps(data["props"],ensure_ascii=False),json.dumps(data["links"],ensure_ascii=False)))
             conn.execute("DELETE FROM notes_fts WHERE path=?",(path,)); conn.execute("INSERT INTO notes_fts VALUES(?,?,?)",(path,data["title"],data["body"]))
-            _rebuild_links(conn); conn.commit()
+            _store_checkboxes(conn,path,content,data)
+            _rebuild_links(conn); _rebuild_note_tasks(conn,(load_config() or {}).get("tasks") or _normalize_tasks(None)); conn.commit()
         finally: conn.close()
 
 
@@ -578,77 +754,62 @@ def create_note(path: str, content: str) -> dict:
     raw=p.read_bytes(); return {"sha256":hashlib.sha256(raw).hexdigest(),"mtime_ns":p.stat().st_mtime_ns,"size":len(raw)}
 
 
-def trash_note(path: str) -> dict:
-    with _LOCK:
-        return _trash_note_locked(path)
-
-
-def _trash_note_locked(path: str) -> dict:
-    root, excluded=require_config(); p=_validate(path,note=True,root=root,exclude=excluded)
-    if not p.is_file(): raise VaultError("not_found",404)
-    trash=root/".trash"
-    try:
-        trash.mkdir(exist_ok=True)
-    except OSError:
-        raise VaultError("trash_unavailable", 409) from None
-    if trash.is_symlink() or not trash.is_dir():
-        raise VaultError("trash_unavailable", 409)
-    try:
-        trash.resolve(strict=True).relative_to(root.resolve())
-    except (OSError, RuntimeError, ValueError):
-        raise VaultError("trash_unavailable", 409) from None
-    dest=trash/path.replace("/","__")
-    while True:
-        try:
-            os.link(p,dest)
-            break
-        except FileExistsError:
-            dest=trash/(f"{Path(path).stem}-{uuid.uuid4().hex}.md")
-        except OSError:
-            raise VaultError("trash_unavailable", 409) from None
-    try:
-        p.unlink()
-    except OSError:
-        dest.unlink(missing_ok=True)
-        raise VaultError("trash_unavailable", 409) from None
-    conn=_connect(False)
-    if conn:
-        migrated=False
-        try:
-            migrated=_schema(conn)
-            if not migrated:
-                conn.execute("DELETE FROM notes WHERE path=?",(path,)); conn.execute("DELETE FROM notes_fts WHERE path=?",(path,)); conn.execute("DELETE FROM links WHERE src=? OR target=?",(path,path)); conn.commit()
-        finally: conn.close()
-        if migrated: refresh()
-    return {"trashed":dest.relative_to(root).as_posix()}
+def _task_state(kind: str, status: str | None) -> str:
+    """progress | waiting | done | open. Checkbox statuses are already normalised; note statuses use the free-form vocabulary."""
+    if kind == "checkbox":
+        return "progress" if status == "in-progress" else "open"
+    s = (status or "").strip().lower()
+    if s in IN_PROGRESS_STATUSES: return "progress"
+    if s in WAITING_STATUSES: return "waiting"
+    if s in DONE_STATUSES: return "done"
+    return "open"
 
 
 def dashboard() -> dict:
     root, excluded = require_config()
     cfg = load_config() or {}
     attention_field, inbox_folder = cfg.get("attention_field"), cfg.get("inbox_folder")
+    tag_cfg = cfg.get("attention_tag"); attention_tag = _normalize_tag(tag_cfg) if tag_cfg else None
+    boxes_on = bool(((cfg.get("tasks") or {}).get("checkboxes") or {}).get("enabled", True))
+    sections = {"attention": bool(attention_field or attention_tag)}
     conn=_connect(False)
-    if conn is None: return {"attention":[],"due":[],"in_progress":{},"recent":[],"inbox":[],"sections":{"attention":bool(attention_field)},"counts":{"notes":0,"tasknotes":0}}
+    if conn is None: return {"attention":[],"due":[],"in_progress":{},"recent":[],"inbox":[],"sections":sections,"counts":{"notes":0,"tasks":0,"tasknotes":0,"truncated":False}}
     try:
-        notes=[_row_note(r) for r in conn.execute("SELECT * FROM notes")]
+        try: task_rows=conn.execute("SELECT t.*,n.title AS ntitle,n.folder AS nfolder,n.mtime_ns AS nmtime,n.size AS nsize,n.tags AS ntags,n.props AS nprops FROM tasks t JOIN notes n ON n.path=t.path ORDER BY t.path,COALESCE(t.line,0)").fetchall()
+        except sqlite3.OperationalError: task_rows=[]  # index from before 0.5: the next refresh builds the tasks table
         today=date.today(); horizon=today+timedelta(days=7)
-        tasks=[n for n in notes if "tasknote" in n["tags"]]
-        needs=[]; due=[]; projects:dict[str,list]={}
-        for n in tasks:
-            p=n["props"]; status=str(p.get("status","")).lower(); due_raw=p.get("due")
-            if attention_field and p.get(attention_field) and status in {"waiting","blocked"}: needs.append(n)
-            if due_raw and status not in {"done","canceled"}:
-                try:
-                    d=date.fromisoformat(str(due_raw)[:10])
-                    if d<=horizon: due.append({**n,"overdue":d<today})
-                except ValueError: pass
-            if status in {"in-progress","open"}:
-                vals=p.get("projects",[]); vals=vals if isinstance(vals,list) else [vals]
-                for project in vals or [""]:
-                    label=re.sub(r"^\[\[|\]\]$","",str(project)).split("|",1)[0]
-                    projects.setdefault(label,[]).append(n)
-        recent=sorted((n for n in notes if "tasknote" not in n["tags"]),key=lambda n:n["mtime_ns"],reverse=True)[:30]
-        inbox=[n for n in notes if inbox_folder and n["path"].startswith(inbox_folder + "/")]
+        needs=[]; due=[]; projects:dict[str,list]={}; total=0; boxes=0
+        for r in task_rows:
+            kind=r["kind"]
+            if kind=="checkbox":
+                boxes+=1
+                if not boxes_on: continue
+            state=_task_state(kind,r["status"])
+            if state=="done": continue
+            total+=1
+            labels=json.loads(r["project"] or "[]"); tags=json.loads(r["tags"] or "[]")
+            if kind=="note":
+                props=json.loads(r["nprops"]); raw=props.get("projects")
+                if raw in (None,"",[]): raw=props.get("project")
+                if raw not in (None,"",[]): props["projects"]=raw if isinstance(raw,list) else [raw]
+                item={"kind":"note","path":r["path"],"title":r["ntitle"],"folder":r["nfolder"],"mtime_ns":r["nmtime"],"size":r["nsize"],"tags":json.loads(r["ntags"]),"props":{**props,"status":r["status"],"due":r["due"]}}
+                if attention_field and props.get(attention_field) and state=="waiting": needs.append(item)
+            else:
+                item={"kind":"checkbox","path":r["path"],"title":r["text"],"note_title":r["ntitle"],"line":r["line"],"folder":r["nfolder"],"mtime_ns":r["nmtime"],"size":r["nsize"],"tags":tags,"props":{"status":r["status"],"due":r["due"],"projects":labels}}
+                if attention_tag and attention_tag in {str(t).casefold() for t in tags}: needs.append(item)
+            if r["due"]:
+                d=date.fromisoformat(r["due"])
+                if d<=horizon: due.append({**item,"overdue":d<today})
+            if state=="progress":
+                for label in labels or [""]: projects.setdefault(label,[]).append(item)
+        due.sort(key=lambda i:(i["props"]["due"],i["path"],i.get("line") or 0))
+        note_task_paths={r["path"] for r in task_rows if r["kind"]=="note"}
+        count=0; recent=[]; inbox=[]
+        for row in conn.execute("SELECT * FROM notes ORDER BY mtime_ns DESC,path ASC"):
+            count+=1
+            if len(recent)<30 and row["path"] not in note_task_paths: recent.append(_row_note(row))
+            if inbox_folder and row["path"].startswith(inbox_folder + "/"): inbox.append(_row_note(row))
         return {"attention":needs,"due":due,"in_progress":projects,"recent":recent,"inbox":inbox,
-                "sections":{"attention":bool(attention_field)},"counts":{"notes":len(notes),"tasknotes":len(tasks)}}
+                "sections":sections,"counts":{"notes":count,"tasks":total,"tasknotes":total,"truncated":boxes_on and boxes>=MAX_CHECKBOX_TASKS}}
     finally: conn.close()
+

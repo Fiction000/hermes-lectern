@@ -20,6 +20,8 @@ class ConfigBody(BaseModel):
     attention_field: str | None = None
     inbox_folder: str | None = None
     locale: str | None = None
+    tasks: dict | None = None
+    attention_tag: str | None = None
 
 
 class PathBody(BaseModel):
@@ -46,7 +48,7 @@ def get_status():
 
 @router.put("/config")
 def put_config(body: ConfigBody):
-    return _call(core.configure, body.root, body.exclude, body.attention_field, body.inbox_folder, body.locale or "auto")
+    return _call(core.configure, body.root, body.exclude, body.attention_field, body.inbox_folder, body.locale or "auto", body.tasks, body.attention_tag)
 
 
 @router.post("/refresh")
@@ -95,7 +97,3 @@ def put_note(body: NoteBody):
 def post_note(body: NoteBody):
     return _call(core.create_note, body.path, body.content)
 
-
-@router.post("/note/trash")
-def post_trash(body: PathBody = Body(...)):
-    return _call(core.trash_note, body.path)
