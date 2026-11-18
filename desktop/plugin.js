@@ -283,7 +283,7 @@ const CSS = `
 .hv{container-type:inline-size;container-name:hv;--hv-page:var(--ui-bg-chrome);--hv-panel:var(--ui-bg-editor);--hv-panel-raised:var(--ui-bg-elevated,var(--ui-bg-quaternary));--hv-line:var(--ui-stroke-tertiary);--hv-ink:var(--ui-text-primary);--hv-muted:var(--ui-text-secondary);--hv-dim:var(--ui-text-tertiary);--hv-red:var(--ui-red);--hv-orange:var(--ui-orange);height:100%;display:flex;flex-direction:column;color:var(--hv-ink);font-size:15px;line-height:1.5;background:var(--hv-page)}
 .hv *{box-sizing:border-box;scrollbar-width:none}.hv *::-webkit-scrollbar{display:none}
 .hv-scroll{overflow:auto;scrollbar-width:none}.hv-scroll::-webkit-scrollbar{display:none}
-.hv-top{display:flex;align-items:center;gap:16px;padding:16px 32px 8px}.hv-top .grow{flex:1;max-width:420px}.hv-tabs{display:none}.hv-home-btn{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:5px;background:none;color:var(--hv-muted);font:inherit;font-size:14px;padding:6px 8px;cursor:pointer;white-space:nowrap;transition:background .18s ease}.hv-home-btn:hover{background:color-mix(in srgb,var(--chrome-action-hover) 70%,transparent);color:var(--hv-ink)}
+.hv-top{display:flex;align-items:center;gap:16px;padding:16px 32px 8px}.hv-top .grow{flex:1;max-width:420px}.hv-tabs{display:none}.hv-home-btn{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:5px;background:none;color:var(--hv-muted);font:inherit;font-size:14px;padding:6px 8px;cursor:pointer;white-space:nowrap;transition:background .18s ease}.hv-back{border:1px solid var(--hv-line,var(--border));color:var(--hv-ink);font-weight:500;padding:6px 12px}.hv-home-btn:hover{background:color-mix(in srgb,var(--chrome-action-hover) 70%,transparent);color:var(--hv-ink)}
 .hv-top-tools{flex:1}.hv-top-date{color:var(--hv-dim);font-size:13px;white-space:nowrap}
 .hv-home{flex:1;min-height:0;padding:12px 28px 48px;display:flex;flex-direction:column;gap:22px}
 .hv-date{display:none}.hv-stats{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
@@ -837,7 +837,7 @@ function Page({ api }) {
   return jsxs('div', { className: 'hv', children: [
     jsx('style', { children: CSS }),
     jsxs('div', { className: 'hv-top', children: [
-      showList && jsx('button', { type: 'button', className: 'hv-home-btn', 'aria-label': L('backHome'), title: L('backHome'), onClick: goHome, children: [jsx(Codicon, { name: 'home' }, 'i'), ` ${L('home')}`] }),
+      showList && jsx('button', { type: 'button', className: 'hv-home-btn hv-back', 'aria-label': L('backHome'), title: L('backHome'), onClick: goHome, children: [jsx(Codicon, { name: 'home' }, 'i'), ` ${L('home')}`] }),
       jsx('div', { className: 'grow', children: jsx(SearchField, { placeholder: L('searchNotes'), 'aria-label': L('searchNotes'), value: search, onChange: setSearch }) }),
       jsx('span', { className: 'hv-top-tools' }),
       jsx('span', { className: 'hv-top-date', children: L('todayIs', { date: new Date().toLocaleDateString(LOCALE, { month: 'long', day: 'numeric', weekday: 'short' }) }) }),
