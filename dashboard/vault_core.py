@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -10,12 +11,17 @@ import tempfile
 import threading
 import time
 import uuid
+from urllib.parse import unquote
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 _LOCK = threading.RLock()
 _LINK = re.compile(r"!?\[\[([^\]]+)\]\]")
+MAX_ASSET_BYTES = 15 * 1024 * 1024
+IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+              "avif": "image/avif", "bmp": "image/bmp", "svg": "image/svg+xml"}
+_ASSET_MAPS: dict[str, dict[str, list[str]]] = {}
 SCHEMA_VERSION = "3"  # 3: re-read titles after the quoted-# frontmatter fix
 
 
@@ -280,6 +286,8 @@ def _rebuild_links(conn: sqlite3.Connection) -> None:
 
 def refresh() -> dict:
     root, excluded = require_config()
+    with _LOCK:
+        _ASSET_MAPS.clear()
     started = time.monotonic()
     with _LOCK:
         conn = _connect()
@@ -317,6 +325,87 @@ def refresh() -> dict:
         finally:
             conn.close()
     return {"added": added, "updated": updated, "removed": len(removed_paths), "unchanged": unchanged, "duration_ms": round((time.monotonic()-started)*1000, 2), "changed": changed[:200]}
+
+
+def _hidden_or_odd(parts: list[str]) -> bool:
+    return any(part in ("", ".", "..") or part.startswith(".") for part in parts)
+
+
+def _asset_map(root: Path) -> dict[str, list[str]]:
+    """Image file name -> vault-relative paths. Walks excluded folders too; skips dot entries and symlinks."""
+    key = str(root)
+    with _LOCK:
+        cached = _ASSET_MAPS.get(key)
+        if cached is not None:
+            return cached
+        _ASSET_MAPS.clear()
+        found: dict[str, list[str]] = {}
+        for current, dirs, files in os.walk(root, followlinks=False):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not (Path(current) / d).is_symlink())
+            for name in sorted(files):
+                p = Path(current) / name
+                if name.startswith(".") or "." not in name or name.rsplit(".", 1)[-1].lower() not in IMAGE_MIME or p.is_symlink():
+                    continue
+                found.setdefault(name, []).append(p.relative_to(root).as_posix())
+        _ASSET_MAPS[key] = found
+        return found
+
+
+def _asset_file(root: Path, rel: str) -> Path | None:
+    """The file at a vault-relative path, None if absent. Refuses symlinks and real paths outside the root."""
+    cur = root
+    for part in rel.split("/"):
+        cur = cur / part
+        if cur.is_symlink():
+            raise VaultError("bad_asset_path")
+    if not cur.exists():
+        return None
+    try:
+        cur.resolve(strict=True).relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        raise VaultError("bad_asset_path") from None
+    return cur if cur.is_file() else None
+
+
+def resolve_asset(target: str, from_note: str = "") -> dict:
+    root, _ = require_config()
+    if not isinstance(target, str):
+        raise VaultError("bad_asset_path")
+    name = unquote(target.split("|", 1)[0].split("#", 1)[0].strip()).strip()
+    if name.startswith("<") and name.endswith(">"):
+        name = name[1:-1].strip()
+    if not name or "\\" in name or "\x00" in name or name.startswith("/"):
+        raise VaultError("bad_asset_path")
+    parts = name.split("/")
+    if _hidden_or_odd(parts):
+        raise VaultError("bad_asset_path")
+    last = parts[-1]
+    ext = last.rsplit(".", 1)[-1].lower() if "." in last else ""
+    if ext not in IMAGE_MIME:
+        raise VaultError("not_image", 415)
+    note_parts = from_note.split("/")[:-1] if isinstance(from_note, str) and "\\" not in from_note else []
+    folder = "" if _hidden_or_odd(note_parts) else "/".join(note_parts)
+    if len(parts) > 1:
+        candidates = ([f"{folder}/{name}"] if folder else []) + [name]
+    else:
+        candidates = sorted(_asset_map(root).get(name, []),
+                            key=lambda r: (0 if r.rpartition("/")[0] == folder else 1, r.count("/"), r))
+    path, rel = None, ""
+    for rel in candidates:
+        path = _asset_file(root, rel)
+        if path is not None:
+            break
+    if path is None:
+        raise VaultError("asset_not_found", 404)
+    try:
+        if path.stat().st_size > MAX_ASSET_BYTES:
+            raise VaultError("asset_too_large", 413)
+        data = path.read_bytes()
+    except OSError:
+        raise VaultError("asset_not_found", 404) from None
+    if len(data) > MAX_ASSET_BYTES:
+        raise VaultError("asset_too_large", 413)
+    return {"path": rel, "mime": IMAGE_MIME[ext], "data": base64.b64encode(data).decode("ascii"), "size": len(data)}
 
 
 def status() -> dict:

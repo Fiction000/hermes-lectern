@@ -79,6 +79,11 @@ def get_note(path: str):
     return _call(core.read_note, path)
 
 
+@router.get("/asset")
+def get_asset(path: str, from_note: str = Query("", alias="from")):
+    return _call(core.resolve_asset, path, from_note)
+
+
 @router.put("/note")
 def put_note(body: NoteBody):
     if body.base_sha256 is None:

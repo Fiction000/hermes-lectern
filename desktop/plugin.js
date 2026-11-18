@@ -162,6 +162,8 @@ export const STRINGS = {
     save: "Save",
     unassigned: "(No project)",
     setupEditTitle: "Settings",
+    imageLoading: "Loading image…",
+    imageMissing: "Image not found: {name}",
   },
   ja: {
     needs: "判断待ち",
@@ -257,6 +259,8 @@ export const STRINGS = {
     save: "保存",
     unassigned: "（未分類）",
     setupEditTitle: "設定",
+    imageLoading: "画像を読み込み中…",
+    imageMissing: "画像が見つかりません: {name}",
   },
 };
 // i18n:ja-end
@@ -379,32 +383,87 @@ export function headingsOf(markdown) {
 }
 const btn = (label, onClick, props = {}) => jsx(Button, { type: 'button', variant: 'secondary', onClick, ...props, children: label });
 
+// ---- Image embeds. Only vault files are shown, fetched through the backend as base64;
+// remote images are never loaded and become plain links.
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+const widthOf = text => (/^\d{1,5}$/.test(String(text).trim()) ? Number(text) : null);
+export function parseImageEmbed(token) {
+  let m = /^!\[\[([^\]]+)\]\]$/.exec(token);
+  if (m) {
+    const [target, extra] = [m[1].split('|')[0].trim(), m[1].split('|').slice(1).join('|').trim()];
+    if (!IMAGE_EXT.test(target.split('#')[0])) return null;
+    const width = widthOf(extra);
+    return { kind: 'image', target, width, alt: (width === null && extra) || target.split('/').pop() };
+  }
+  m = /^!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))\)$/.exec(token);
+  if (!m) return null;
+  const target = (m[2] ?? m[3]).trim();
+  const alt = m[1].split('|')[0].trim(), width = widthOf(m[1].split('|')[1] ?? '');
+  if (/^https?:/i.test(target)) return { kind: 'link', href: target, label: alt || target };
+  if (!IMAGE_EXT.test(target.split('#')[0].split('?')[0]) || /^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
+  return { kind: 'image', target, width, alt: alt || target.split('/').pop() };
+}
+const ASSET_CACHE = new Map();
+export function clearAssetCache() { ASSET_CACHE.clear(); }
+export function loadAsset(rest, from, target) {
+  const key = `${from}\n${target}`;
+  if (!ASSET_CACHE.has(key)) {
+    if (ASSET_CACHE.size >= 40) ASSET_CACHE.delete(ASSET_CACHE.keys().next().value);
+    const pending = Promise.resolve().then(() => rest(`/asset?path=${enc(target)}&from=${enc(from)}`));
+    pending.catch(() => { if (ASSET_CACHE.get(key) === pending) ASSET_CACHE.delete(key); });
+    ASSET_CACHE.set(key, pending);
+  }
+  return ASSET_CACHE.get(key);
+}
+function ImageEmbed({ api, from, target, width, alt }) {
+  const [state, setState] = useState({ status: 'loading' });
+  useEffect(() => {
+    let live = true;
+    setState({ status: 'loading' });
+    loadAsset(api.rest, from, target).then(
+      r => { if (live) setState({ status: 'ready', src: `data:${r.mime};base64,${r.data}` }); },
+      () => { if (live) setState({ status: 'missing' }); },
+    );
+    return () => { live = false; };
+  }, [api, from, target]);
+  if (state.status === 'ready') return jsx('img', { src: state.src, alt, loading: 'lazy', style: { maxWidth: '100%', ...(width ? { width } : {}) } });
+  return jsx('span', { className: 'hv-dim', style: { color: 'var(--hv-dim)' }, children: state.status === 'loading' ? L('imageLoading') : L('imageMissing', { name: target }) });
+}
+
 // ---- Markdown (read view). Small on purpose: headings, lists, quotes, code,
 // tables, links and wikilinks. Anything else falls through as plain text.
-function inline(text, open, keyBase) {
+function inline(text, open, keyBase, img) {
   const out = []; let rest = text, i = 0;
-  const re = /(`[^`]+`)|(!?\[\[[^\]]+\]\])|(\[[^\]]+\]\((https?:[^)\s]+)\))|(\*\*[^*]+\*\*)/;
+  const re = /(`[^`]+`)|(!\[\[[^\]]+\]\]|!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)\))|(\[\[[^\]]+\]\])|(\[[^\]]+\]\((https?:[^)\s]+)\))|(\*\*[^*]+\*\*)/;
   while (rest) {
     const m = re.exec(rest);
     if (!m) { out.push(rest); break; }
     if (m.index) out.push(rest.slice(0, m.index));
     const tok = m[0], k = `${keyBase}-${i++}`;
     if (m[1]) out.push(jsx('code', { children: tok.slice(1, -1) }, k));
-    else if (m[2]) {
-      const inner = tok.replace(/^!?\[\[|\]\]$/g, ''), target = inner.split('|')[0], label = inner.split('|')[1] || target.split('/').pop();
-      out.push(jsx('button', { type: 'button', className: 'hv-link', onClick: () => open(target), children: label }, k));
-    } else if (m[3]) {
+    else if (m[2] || m[3]) {
+      const embed = m[2] ? parseImageEmbed(tok) : null;
+      if (embed?.kind === 'link') out.push(jsx('a', { className: 'hv-link', href: embed.href, target: '_blank', rel: 'noreferrer', children: embed.label }, k));
+      else if (embed?.kind === 'image' && img) out.push(jsx(ImageEmbed, { api: img.api, from: img.from, target: embed.target, width: embed.width, alt: embed.alt }, k));
+      else if (embed) out.push(embed.alt);
+      else if (m[2] && tok.startsWith('![') && !tok.startsWith('![[')) out.push(tok);
+      else {
+        const inner = tok.replace(/^!?\[\[|\]\]$/g, ''), target = inner.split('|')[0], label = inner.split('|')[1] || target.split('/').pop();
+        out.push(jsx('button', { type: 'button', className: 'hv-link', onClick: () => open(target), children: label }, k));
+      }
+    } else if (m[4]) {
       const label = tok.slice(1, tok.indexOf(']('));
-      out.push(jsx('a', { className: 'hv-link', href: m[4], target: '_blank', rel: 'noreferrer', children: label }, k));
+      out.push(jsx('a', { className: 'hv-link', href: m[5], target: '_blank', rel: 'noreferrer', children: label }, k));
     } else out.push(jsx('strong', { children: tok.slice(2, -2) }, k));
     rest = rest.slice(m.index + tok.length);
   }
   return out;
 }
-function Markdown({ body, open }) {
+function Markdown({ body, open, api, from }) {
+  const img = useMemo(() => (api ? { api, from } : null), [api, from]);
   const blocks = useMemo(() => {
     const lines = body.split('\n'), out = []; let i = 0, headingIndex = 0;
-    const flush = (tag, items) => out.push(jsx(tag, { children: items.map((t, j) => jsx('li', { children: inline(t, open, `l${out.length}-${j}`) }, j)) }, out.length));
+    const flush = (tag, items) => out.push(jsx(tag, { children: items.map((t, j) => jsx('li', { children: inline(t, open, `l${out.length}-${j}`, img) }, j)) }, out.length));
     while (i < lines.length) {
       const line = lines[i];
       if (!line.trim()) { i++; continue; }
@@ -414,28 +473,28 @@ function Markdown({ body, open }) {
         i++; out.push(jsx('pre', { children: jsx('code', { children: buf.join('\n') }) }, out.length)); continue;
       }
       const h = /^(#{1,6})\s+(.*)$/.exec(line);
-      if (h) { const level = Math.min(h[1].length, 4), id = level >= 2 && level <= 3 ? `hv-heading-${headingIndex++}` : undefined; out.push(jsx(`h${level}`, { id, children: inline(h[2], open, `h${out.length}`) }, out.length)); i++; continue; }
+      if (h) { const level = Math.min(h[1].length, 4), id = level >= 2 && level <= 3 ? `hv-heading-${headingIndex++}` : undefined; out.push(jsx(`h${level}`, { id, children: inline(h[2], open, `h${out.length}`, img) }, out.length)); i++; continue; }
       if (/^(-{3,}|\*{3,})\s*$/.test(line)) { out.push(jsx('hr', {}, out.length)); i++; continue; }
       if (/^\s*[-*+]\s+/.test(line)) { const it = []; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*[-*+]\s+/, '')); flush('ul', it); continue; }
       if (/^\s*\d+[.)]\s+/.test(line)) { const it = []; while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*\d+[.)]\s+/, '')); flush('ol', it); continue; }
-      if (line.startsWith('>')) { const buf = []; while (i < lines.length && lines[i].startsWith('>')) buf.push(lines[i++].replace(/^>\s?/, '')); out.push(jsx('blockquote', { children: inline(buf.join(' '), open, `q${out.length}`) }, out.length)); continue; }
+      if (line.startsWith('>')) { const buf = []; while (i < lines.length && lines[i].startsWith('>')) buf.push(lines[i++].replace(/^>\s?/, '')); out.push(jsx('blockquote', { children: inline(buf.join(' '), open, `q${out.length}`, img) }, out.length)); continue; }
       if (line.startsWith('|') && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1] || '')) {
         const cells = l => l.replace(/^\||\|\s*$/g, '').split('|').map(c => c.trim());
         const head = cells(line), rows = []; i += 2;
         while (i < lines.length && lines[i].startsWith('|')) rows.push(cells(lines[i++]));
         const n = out.length;
         out.push(jsx('table', { children: [
-          jsx('thead', { children: jsx('tr', { children: head.map((c, j) => jsx('th', { children: inline(c, open, `th${n}-${j}`) }, j)) }) }, 'h'),
-          jsx('tbody', { children: rows.map((r, a) => jsx('tr', { children: r.map((c, j) => jsx('td', { children: inline(c, open, `td${n}-${a}-${j}`) }, j)) }, a)) }, 'b'),
+          jsx('thead', { children: jsx('tr', { children: head.map((c, j) => jsx('th', { children: inline(c, open, `th${n}-${j}`, img) }, j)) }) }, 'h'),
+          jsx('tbody', { children: rows.map((r, a) => jsx('tr', { children: r.map((c, j) => jsx('td', { children: inline(c, open, `td${n}-${a}-${j}`, img) }, j)) }, a)) }, 'b'),
         ] }, n)); continue;
       }
       const buf = [];
       while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|```|>|\s*[-*+]\s|\s*\d+[.)]\s|\|)/.test(lines[i])) buf.push(lines[i++]);
       if (!buf.length) buf.push(lines[i++]);
-      out.push(jsx('p', { children: inline(buf.join('\n'), open, `p${out.length}`) }, out.length));
+      out.push(jsx('p', { children: inline(buf.join('\n'), open, `p${out.length}`, img) }, out.length));
     }
     return out;
-  }, [body, open]);
+  }, [body, open, img]);
   return jsx('div', { children: blocks });
 }
 const stripFrontmatter = text => {
@@ -722,7 +781,7 @@ function NotePane({ api, path, onOpen, dirtyRef, touchedStore, setQuoteAction, o
       jsx('div', { className: 'hv-breadcrumb', children: crumb }, 'c'),
       jsx('h1', { children: note.title }, 't'),
       jsx('div', { className: 'hv-created', children: L('createdOn', { d: String(note.props?.created || '').slice(0, 10) }) }, 'created'),
-      jsx(Markdown, { body, open: openLink }, 'm'),
+      jsx(Markdown, { body, open: openLink, api, from: path }, 'm'),
     ] : [jsx('div', { className: 'hv-breadcrumb', children: `${crumb} · ${L('editing')}` }, 'c'), jsx('textarea', { className: 'hv-edit', value: draft, spellCheck: false, autoFocus: true, 'aria-label': L('noteBody'), ref: el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } }, onChange: e => setDraft(e.target.value) }, 'ed')] }),
     quotePos && jsx(Button, { type: 'button', className: 'hv-quote', style: quotePos, onMouseDown: e => e.preventDefault(), onClick: quoteSelection, children: L('quoteToChat') }),
   ] }), jsx(PropertiesRail, { note, headings: headingItems, active: activeHeading, onHeading: id => docRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), onOpen })] });

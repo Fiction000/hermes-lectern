@@ -7,7 +7,7 @@ Hermes Lectern adds a Lectern page to Desktop. It opens to a dashboard of recent
 ## What it does
 
 - **Dashboard.** Tabs for recent notes and for notes Hermes changed with its `write_file` and `patch` tools. If you use [TaskNotes](https://github.com/callumalpass/tasknotes), it also shows overdue tasks, tasks due within 7 days, and tasks in progress grouped by project. Set an attention field to add the tasks that need you.
-- **Reader and editor.** Rendered Markdown with wikilinks, a properties and contents rail, and backlinks. Click Edit, double-click the text or press ⌘E. ⌘S saves, and Esc leaves edit mode when nothing has changed. On Linux, use Ctrl instead of ⌘.
+- **Reader and editor.** Rendered Markdown with wikilinks, image embeds that display, a properties and contents rail, and backlinks. Click Edit, double-click the text or press ⌘E. ⌘S saves, and Esc leaves edit mode when nothing has changed. On Linux, use Ctrl instead of ⌘.
 - **Safe saves.** If Hermes or another app changes a note while you are editing it, Hermes Lectern keeps your draft and lets you keep your version, load the disk version or compare them side by side.
 - **Works with the conversation.** Select text in a note and quote it into the chat with the note's full file path. When Hermes writes to a note, the dashboard lists it and an open copy reloads.
 - **Open from anywhere.** A vault note opened from elsewhere in Desktop opens in Lectern, on Hermes builds that provide the `preview.fileOpener` area. Older builds ignore this and use the normal file preview.
@@ -43,11 +43,11 @@ The top-level `Attachments` folder is left out of the index by default. To chang
 
 ## What it reads, writes and stores
 
-- **Your vault.** It reads Markdown files in the vault folder you choose and writes only when you save or create a note. It has no delete button. It skips hidden folders and symlinks, so files outside the vault never enter the index.
+- **Your vault.** It reads Markdown files in the vault folder you choose and writes only when you save or create a note. It has no delete button. It skips hidden folders and symlinks, so files outside the vault never enter the index. It also reads image files inside the vault to display them, including folders left out of the index.
 - **Its own data.** Settings live in `$HERMES_HOME/hermes-lectern/config.json`. The search index is a SQLite file in the same folder, outside your vault, and can be deleted at any time. For a 5,500-note vault it is about 170 MB.
 - **Hermes events.** The Desktop side of the plugin listens to Hermes `tool.complete` events for `write_file` and `patch` calls, to notice which notes Hermes wrote. The 50 most recent are kept in Desktop's local storage on your computer.
 - **Clipboard.** Quoting writes to the clipboard only when no chat box is open.
-- **Network and hooks.** It only talks to Hermes' own API. It adds no agent tools or hooks, sends no telemetry and never updates itself.
+- **Network and hooks.** It only talks to Hermes' own API. It adds no agent tools or hooks, sends no telemetry and never updates itself. Remote images in notes are not loaded; they show as links.
 
 ## Development
 

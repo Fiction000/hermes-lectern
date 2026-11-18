@@ -1,5 +1,5 @@
 name: hermes-lectern
-version: 0.3.0
+version: 0.4.0
 description: "Read and edit an Obsidian vault in Hermes Desktop, with a dashboard of recent notes, the notes Hermes changed and, with TaskNotes, the tasks that need you."
 requires_hermes: ">=0.21.6"
 provides_tools: []

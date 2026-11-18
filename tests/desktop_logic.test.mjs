@@ -186,3 +186,60 @@ test('new notes start in the browsed folder, else the configured inbox, else the
   assert.equal(newNoteFolder('', null), '');
   assert.equal(newNoteFolder(undefined, undefined), '');
 });
+
+test('parseImageEmbed reads wikilink and Markdown image embeds', () => {
+  const { parseImageEmbed } = plugin;
+  assert.deepEqual(parseImageEmbed('![[x.png]]'), { kind: 'image', target: 'x.png', width: null, alt: 'x.png' });
+  assert.deepEqual(parseImageEmbed('![[x.png|300]]'), { kind: 'image', target: 'x.png', width: 300, alt: 'x.png' });
+  assert.deepEqual(parseImageEmbed('![[a/b.png]]'), { kind: 'image', target: 'a/b.png', width: null, alt: 'b.png' });
+  assert.deepEqual(parseImageEmbed('![[x.png|a caption]]'), { kind: 'image', target: 'x.png', width: null, alt: 'a caption' });
+  assert.deepEqual(parseImageEmbed('![[Shot.PNG]]'), { kind: 'image', target: 'Shot.PNG', width: null, alt: 'Shot.PNG' });
+  assert.deepEqual(parseImageEmbed('![alt](rel/x.png)'), { kind: 'image', target: 'rel/x.png', width: null, alt: 'alt' });
+  assert.deepEqual(parseImageEmbed('![alt](<a b.png>)'), { kind: 'image', target: 'a b.png', width: null, alt: 'alt' });
+  assert.deepEqual(parseImageEmbed('![alt](a%20b.png)'), { kind: 'image', target: 'a%20b.png', width: null, alt: 'alt' });
+  assert.deepEqual(parseImageEmbed('![](x.svg)'), { kind: 'image', target: 'x.svg', width: null, alt: 'x.svg' });
+  assert.deepEqual(parseImageEmbed('![pic|120](x.webp)'), { kind: 'image', target: 'x.webp', width: 120, alt: 'pic' });
+});
+
+test('parseImageEmbed leaves note embeds and non-images alone', () => {
+  const { parseImageEmbed } = plugin;
+  assert.equal(parseImageEmbed('![[Some note]]'), null);
+  assert.equal(parseImageEmbed('![[Some note|alias]]'), null);
+  assert.equal(parseImageEmbed('![doc](file.pdf)'), null);
+  assert.equal(parseImageEmbed('[[x.png]]'), null);
+  assert.equal(parseImageEmbed('plain text'), null);
+});
+
+test('parseImageEmbed turns remote images into links and never into images', () => {
+  const { parseImageEmbed } = plugin;
+  assert.deepEqual(parseImageEmbed('![cat](https://example.com/c.png)'), { kind: 'link', href: 'https://example.com/c.png', label: 'cat' });
+  assert.deepEqual(parseImageEmbed('![](http://example.com/c.png)'), { kind: 'link', href: 'http://example.com/c.png', label: 'http://example.com/c.png' });
+  assert.deepEqual(parseImageEmbed('![x](<https://example.com/a b.png>)'), { kind: 'link', href: 'https://example.com/a b.png', label: 'x' });
+  assert.equal(parseImageEmbed('![x](javascript:alert(1))'), null);
+  assert.equal(parseImageEmbed('![x](data:image/png;base64,AAAA)'), null);
+});
+
+test('loadAsset asks the backend once per note and target', async () => {
+  const { loadAsset, clearAssetCache } = plugin;
+  clearAssetCache();
+  const calls = [];
+  const rest = async path => { calls.push(path); return { mime: 'image/png', data: 'QQ==' }; };
+  const a = await loadAsset(rest, 'N/n.md', 'x.png');
+  await loadAsset(rest, 'N/n.md', 'x.png');
+  await loadAsset(rest, 'N/other.md', 'x.png');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], '/asset?path=x.png&from=N%2Fn.md');
+  assert.equal(a.mime, 'image/png');
+  const failing = async () => { throw new Error('asset_not_found'); };
+  await assert.rejects(loadAsset(failing, 'N/n.md', 'gone.png'));
+  let retried = 0;
+  await loadAsset(async () => { retried++; return { mime: 'image/png', data: '' }; }, 'N/n.md', 'gone.png');
+  assert.equal(retried, 1);
+});
+
+test('image UI strings exist in both languages', () => {
+  assert.equal(plugin.t('imageLoading'), 'Loading image…');
+  assert.equal(plugin.t('imageMissing', { name: 'a.png' }), 'Image not found: a.png');
+  assert.equal(plugin.t('imageLoading', {}, 'ja'), '画像を読み込み中…');
+  assert.equal(plugin.t('imageMissing', { name: 'a.png' }, 'ja'), '画像が見つかりません: a.png');
+});
