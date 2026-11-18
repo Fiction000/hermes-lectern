@@ -1,0 +1,50 @@
+# DRAFT catalog entry for NousResearch/hermes-agent: plugin-catalog/hermes-lectern.yaml
+# Before submitting: push the public repo, replace <TO_PIN_AFTER_PUSH> with the full 40-char
+# commit SHA that contains these assets, and replace <SHA> in every raw URL with the same SHA.
+name: hermes-lectern
+title: Hermes Lectern
+repo: https://github.com/Fiction000/hermes-lectern
+sha: <TO_PIN_AFTER_PUSH>
+version: "0.4.0"
+description: >-
+  A desk you share with Hermes, inside Hermes Desktop: one dashboard of what needs you,
+  what Hermes just changed with write_file and patch, and recent notes, plus a reader and
+  editor for an Obsidian vault. Open notes reload when Hermes edits them, and saves are
+  conflict-safe: if Hermes or another app changes the note you are editing, your draft is
+  kept and you can keep it, load the disk version or compare the two side by side. Editing
+  is raw Markdown (no visual editor, graph or tabs). With TaskNotes it also lists tasks that
+  need you, are overdue or due within 7 days. English and Japanese UI. All file access goes
+  through the plugin's own dashboard backend: no agent tools, no shell commands, no network
+  calls beyond Hermes' own API. Tested on macOS; Linux is untested and Windows is not supported.
+  Disclosure — reads the Markdown files of the vault folder you choose, plus image files
+  inside that vault so notes can show them (hidden folders and symlinks are skipped); writes
+  to the vault only when you save or create a note, and has no delete. Stores its settings and
+  a SQLite search index in $HERMES_HOME/hermes-lectern, outside the vault (safe to delete;
+  about 170 MB for a 5,500-note vault). The Desktop side listens to Hermes tool.complete
+  events for write_file and patch to learn which notes Hermes changed, keeps the 50 most
+  recent paths in Desktop local storage, and while you edit a note re-reads that one note
+  through Hermes' API every 8 seconds to notice outside changes. Writes to the clipboard only
+  when you quote a selection and no chat box is open. No third-party network calls, remote
+  images in notes are not loaded (they show as links), no agent tools or hooks, no telemetry,
+  no self-update. It claims vault notes opened elsewhere in Desktop only on Hermes builds that
+  provide the preview.fileOpener area; older builds ignore that.
+maintainer: Fiction000
+tier: community
+category: desktop
+requires_hermes: ">=0.21.5"
+docs_url: https://github.com/Fiction000/hermes-lectern#readme
+readme: true
+image: https://raw.githubusercontent.com/Fiction000/hermes-lectern/<SHA>/assets/banner.png
+screenshots:
+  - https://raw.githubusercontent.com/Fiction000/hermes-lectern/<SHA>/screenshots/dashboard-changed-by-hermes.png
+  - https://raw.githubusercontent.com/Fiction000/hermes-lectern/<SHA>/screenshots/reader-image.png
+  - https://raw.githubusercontent.com/Fiction000/hermes-lectern/<SHA>/screenshots/safe-save-compare.png
+platforms: [linux, macos]
+known_issues:
+  - "Tested on macOS only; Linux is untested. Windows is not supported (the vault path must start with /)."
+  - "The first index reads every note: a 5,500-note vault took about 40 seconds on a Mac."
+capabilities:
+  provides_tools: []
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []
